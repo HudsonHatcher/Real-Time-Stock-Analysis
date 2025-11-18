@@ -30,7 +30,7 @@ def push_prices(ticker, points):
 def fetch_batch(ticker):
     try:
         # Add delay to avoid rate limiting
-        time.sleep(2)  # 2 second delay between requests
+        time.sleep(3)  # 3 second delay between requests
         
         ticker_obj = yf.Ticker(ticker)
         
@@ -39,8 +39,12 @@ def fetch_batch(ticker):
         
         # Strategy 1: Try daily data first (more reliable, less rate-limited)
         try:
-            df = ticker_obj.history(period="1mo", interval="1d", timeout=30)
-            if not df.empty:
+            logger.debug("fetching_daily_data", ticker=ticker)
+            # Try with longer timeout and retry
+            df = ticker_obj.history(period="1mo", interval="1d", timeout=60, raise_errors=False)
+            
+            # Check if we got valid data
+            if df is not None and not df.empty:
                 logger.info("fetched_daily", ticker=ticker, count=len(df))
                 # Create synthetic 5-min data points from daily data
                 # Spread each day's data across 78 5-min intervals (6.5 hours of trading)
@@ -72,21 +76,93 @@ def fetch_batch(ticker):
                 df = pd.DataFrame(expanded_rows)
                 df.set_index("Datetime", inplace=True)
                 logger.info("fetched_daily_expanded", ticker=ticker, count=len(df))
+            elif df is None or df.empty:
+                logger.warning("fetch_daily_empty", ticker=ticker)
+                # Try alternative period if 1mo failed
+                try:
+                    time.sleep(2)
+                    logger.debug("fetching_daily_data_alt", ticker=ticker, period="5d")
+                    df = ticker_obj.history(period="5d", interval="1d", timeout=60, raise_errors=False)
+                    if df is not None and not df.empty:
+                        logger.info("fetched_daily_alt", ticker=ticker, count=len(df))
+                        # Expand to synthetic 5-min intervals (same logic as above)
+                        expanded_rows = []
+                        for idx, row in df.iterrows():
+                            base_time = pd.Timestamp(idx)
+                            if base_time.tzinfo is None:
+                                try:
+                                    import pytz
+                                    base_time = pytz.timezone('US/Eastern').localize(base_time)
+                                except:
+                                    base_time = base_time.tz_localize('US/Eastern')
+                            for i in range(78):
+                                ts = base_time + pd.Timedelta(minutes=9*60+30 + i*5)
+                                price_range = row["High"] - row["Low"]
+                                close_price = row["Close"]
+                                price_offset = (i / 77.0 - 0.5) * price_range * 0.1
+                                expanded_rows.append({
+                                    "Datetime": ts,
+                                    "Open": close_price + price_offset,
+                                    "High": row["High"],
+                                    "Low": row["Low"],
+                                    "Close": close_price + price_offset,
+                                    "Volume": int(row["Volume"] / 78) if row["Volume"] > 0 else 0
+                                })
+                        df = pd.DataFrame(expanded_rows)
+                        df.set_index("Datetime", inplace=True)
+                        logger.info("fetched_daily_alt_expanded", ticker=ticker, count=len(df))
+                except Exception as e2:
+                    logger.warning("fetch_daily_alt_failed", ticker=ticker, err=str(e2))
         except Exception as e:
-            logger.error("fetch_daily_failed", ticker=ticker, err=str(e))
+            logger.error("fetch_daily_failed", ticker=ticker, err=str(e), err_type=type(e).__name__)
+            # Try one more time with different parameters
+            try:
+                time.sleep(3)
+                logger.debug("fetching_daily_retry", ticker=ticker)
+                df = ticker_obj.history(period="5d", interval="1d", timeout=60, raise_errors=False)
+                if df is not None and not df.empty:
+                    logger.info("fetched_daily_retry_success", ticker=ticker, count=len(df))
+                    # Expand to synthetic 5-min intervals
+                    expanded_rows = []
+                    for idx, row in df.iterrows():
+                        base_time = pd.Timestamp(idx)
+                        if base_time.tzinfo is None:
+                            try:
+                                import pytz
+                                base_time = pytz.timezone('US/Eastern').localize(base_time)
+                            except:
+                                base_time = base_time.tz_localize('US/Eastern')
+                        for i in range(78):
+                            ts = base_time + pd.Timedelta(minutes=9*60+30 + i*5)
+                            price_range = row["High"] - row["Low"]
+                            close_price = row["Close"]
+                            price_offset = (i / 77.0 - 0.5) * price_range * 0.1
+                            expanded_rows.append({
+                                "Datetime": ts,
+                                "Open": close_price + price_offset,
+                                "High": row["High"],
+                                "Low": row["Low"],
+                                "Close": close_price + price_offset,
+                                "Volume": int(row["Volume"] / 78) if row["Volume"] > 0 else 0
+                            })
+                    df = pd.DataFrame(expanded_rows)
+                    df.set_index("Datetime", inplace=True)
+                    logger.info("fetched_daily_retry_expanded", ticker=ticker, count=len(df))
+            except Exception as e2:
+                logger.error("fetch_daily_retry_failed", ticker=ticker, err=str(e2))
         
         # Strategy 2: Try intraday 5-minute data (if daily worked, skip this to avoid rate limits)
         if (df is None or df.empty) and False:  # Disabled to avoid rate limits
             try:
                 time.sleep(3)  # Extra delay for intraday requests
-                df = ticker_obj.history(period="5d", interval="5m", prepost=False, timeout=30)
-                if not df.empty:
+                df = ticker_obj.history(period="5d", interval="5m", prepost=False, timeout=60, raise_errors=False)
+                if df is not None and not df.empty:
                     logger.info("fetched_intraday", ticker=ticker, count=len(df))
             except Exception as e:
                 logger.warning("fetch_intraday_failed", ticker=ticker, err=str(e))
         
         if df is None or df.empty:
-            logger.warning("no_data_available", ticker=ticker)
+            logger.warning("no_data_available", ticker=ticker, df_type=type(df).__name__ if df is not None else "None")
             return []
         
         df = df.reset_index()
