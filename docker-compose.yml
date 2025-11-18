@@ -1,0 +1,56 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: stock
+      POSTGRES_PASSWORD: stockpw
+      POSTGRES_DB: stocks
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stock -d stocks"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  analysis:
+    build: ./analysis-service
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://stock:stockpw@db:5432/stocks
+      DASH_PORT: 8050
+    depends_on:
+      db:
+        condition: service_healthy
+    ports: ["8050:8050"]
+
+  price:
+    build: ./price-service
+    env_file: .env
+    environment:
+      TICKERS: ${TICKERS:-AAPL,MSFT,GOOGL}
+      INTERVAL: 300       # seconds (≈5m)
+      ANALYSIS_URL: http://analysis:8050
+      # Disable proxy for yfinance requests
+      NO_PROXY: "*"
+      no_proxy: "*"
+    depends_on:
+      - analysis
+
+  fundamentals:
+    build: ./fundementals-service
+    env_file: .env
+    environment:
+      TICKERS: ${TICKERS:-AAPL,MSFT,GOOGL}
+      REFRESH_SECONDS: 3600
+      ANALYSIS_URL: http://analysis:8050
+      # Disable proxy for yfinance requests
+      NO_PROXY: "*"
+      no_proxy: "*"
+    depends_on:
+      - analysis
+
+volumes:
+  pgdata:
+

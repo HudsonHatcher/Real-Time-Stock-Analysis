@@ -1,0 +1,10 @@
+fastapi==0.104.1
+uvicorn==0.24.0
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+dash==2.14.2
+plotly==5.18.0
+requests==2.31.0
+structlog==23.2.0
+python-dateutil==2.8.2
+

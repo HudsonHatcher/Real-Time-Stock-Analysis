@@ -4,7 +4,7 @@ FROM python:${PYTHON_VERSION}-slim as base
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-WORKDIR /fundementals-service
+WORKDIR /analysis-service
 
 ARG UID=10001
 RUN adduser \
@@ -24,4 +24,8 @@ USER appuser
 
 COPY . .
 
+EXPOSE 8050
+
 CMD ["python", "app.py"]
+
+
