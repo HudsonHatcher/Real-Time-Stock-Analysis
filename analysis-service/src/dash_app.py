@@ -2,7 +2,12 @@ from dash import Dash, dcc, html, Input, Output, ClientsideFunction
 import requests
 from fastapi import FastAPI
 from starlette.middleware.wsgi import WSGIMiddleware
+from openai import OpenAI
 import json
+
+API_KEY = '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'
+
+client = OpenAI(api_key=API_KEY)
 
 def mount_dash(fastapi_app: FastAPI):
     dash_app = Dash(__name__)
@@ -593,6 +598,7 @@ def mount_dash(fastapi_app: FastAPI):
     def update(ticker, n_intervals):
         import plotly.graph_objects as go
         import os
+        from pydantic import BaseModel
         
         # Debug info - will be sent to clientside callback
         api_base = os.getenv("API_BASE_URL", "http://localhost:8050")
@@ -800,6 +806,38 @@ def mount_dash(fastapi_app: FastAPI):
                     "↑" if is_positive else "↓",
                     f" ${abs(price_change):.2f} ({abs(price_change_pct):.2f}%)"
                 ], className=f"price-indicator {'price-up' if is_positive else 'price-down'}")
+
+            analysis_prompt = f"""
+                Provide a concise analysis of the stock {ticker} based on the data:
+
+                - Current Price: {current_price}
+                - Price Change: {price_change} ({price_change_pct}%)
+                - P/E Ratio (TTM): {f.get('pe_ttm')}
+                - Market Cap: {f.get('market_cap')}
+                - 52-Week High: {f.get('fifty_two_week_high')}
+                - 52-Week Low: {f.get('fifty_two_week_low')}
+                - SMA20 Available: {debug_info.get('sma20_has', True)}
+
+                Give a short, direct summary (4–6 sentences) describing:
+                • Trend direction  
+                • Valuation (cheap/expensive vs history)  
+                • Risk level  
+                • Whether momentum is increasing or decreasing  
+
+                Do NOT include disclaimers. 
+                """
+
+            resp = client.chat.completions.create(
+                model = "gpt-4.1-mini",
+                messages = [
+                    {
+                        "role" : "user",
+                        "content" : analysis_prompt
+                    } 
+                ]
+            )
+
+            message = resp.choices[0].message.content
             
             funds = html.Div([
                 html.Div([
@@ -845,11 +883,22 @@ def mount_dash(fastapi_app: FastAPI):
                 ], className="metric-card"),
                 html.Div([
                     html.Div([
+                        html.Span("📊", className="metric-icon"),
+                        "Analysis of Stocks"
+                        ], className="metric-label"),
+                    html.Div(message, className="metric-value", style={
+                        "fontSize": "16px",
+                        "lineHeight": "1.4",
+                        "marginTop": "8px"
+                    })
+                ], className="metric-card"),
+                html.Div([
+                    html.Div([
                         html.Span("🔄", className="metric-icon"),
                         "Last Updated"
                     ], className="metric-label"),
                     html.Span(f.get('as_of', 'N/A'), className="metric-value", style={"fontSize": "20px"})
-                ], className="metric-card")
+                ], className="metric-card"),
             ])
             
             debug_info["status"] = "success"
